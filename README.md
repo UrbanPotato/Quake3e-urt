@@ -1,86 +1,119 @@
-# Quake3e
+# Patches — Quake3e-subtick + FTWGL Fork
 
-[![build](../../workflows/build/badge.svg)](../../actions?query=workflow%3Abuild) * <a href="https://discord.com/invite/X3Exs4C"><img src="https://img.shields.io/discord/314456230649135105?color=7289da&logo=discord&logoColor=white" alt="Discord server" /></a>
+These patches port all ftwgl/urt and subtick features from this fork to upstream
+[ec-/Quake3e](https://github.com/ec-/Quake3e). They are generated against
+upstream `main` and must be applied **in order**.
 
-This is a modern Quake III Arena engine aimed to be fast, secure and compatible with all existing Q3A mods.
-It is based on last non-SDL source dump of [ioquake3](https://github.com/ioquake/ioq3) with latest upstream fixes applied.
+## Applying
 
-Go to [Releases](../../releases) section to download latest binaries for your platform or follow [Build Instructions](#build-instructions)
+```bash
+# Fork and clone upstream quake3e
+git clone https://github.com/<you>/Quake3e.git
+cd Quake3e
 
-*This repository does not contain any game content so in order to play you must copy the resulting binaries into your existing Quake III Arena installation*
+# Apply all patches in order
+git am patches/0001-ftwgl-base-server-infrastructure.patch
+git am patches/0002-subtick-engine-side-antilag.patch
+git am patches/0003-ftwgl-client-changes.patch
+git am patches/0004-ftwgl-network-and-common.patch
+git am patches/0005-ftwgl-build-system.patch
+```
 
-**Key features**:
+Or apply all at once:
 
-* optimized OpenGL renderer
-* optimized Vulkan renderer
-* raw mouse input support, enabled automatically instead of DirectInput(**\in_mouse 1**) if available
-* unlagged mouse events processing, can be reverted by setting **\in_lagged 1**
-* **\in_minimize** - hotkey for minimize/restore main window (win32-only, direct replacement for Q3Minimizer)
-* **\video-pipe** - to use external ffmpeg binary as an encoder for better quality and smaller output files
-* significally reworked QVM (Quake Virtual Machine)
-* improved server-side DoS protection, much reduced memory usage
-* raised filesystem limits (up to 20,000 maps can be handled in a single directory)
-* reworked Zone memory allocator, no more out-of-memory errors
-* non-intrusive support for SDL2 backend (video, audio, input), selectable at compile time
-* tons of bug fixes and other improvements
+```bash
+git am patches/*.patch
+```
 
-## Vulkan renderer
+If a patch has conflicts due to upstream changes:
 
-Based on [Quake-III-Arena-Kenny-Edition](https://github.com/kennyalive/Quake-III-Arena-Kenny-Edition) with many additions:
+```bash
+git am --abort                    # cancel
+git am --3way patches/XXXX.patch  # retry with 3-way merge
+```
 
-* high-quality per-pixel dynamic lighting
-* very fast flares (**\r_flares 1**)
-* anisotropic filtering (**\r_ext_texture_filter_anisotropic**)
-* greatly reduced API overhead (call/dispatch ratio)
-* flexible vertex buffer memory management to allow loading huge maps
-* multiple command buffers to reduce processing bottlenecks
-* [reversed depth buffer](https://developer.nvidia.com/content/depth-precision-visualized) to eliminate z-fighting on big maps
-* merged lightmaps (atlases)
-* multitexturing optimizations
-* static world surfaces cached in VBO (**\r_vbo 1**)
-* useful debug markers for tools like [RenderDoc](https://renderdoc.org/)
-* fixed framebuffer corruption on some Intel iGPUs
-* offscreen rendering, enabled with **\r_fbo 1**, all following requires it enabled:
-* `screenMap` texture rendering - to create realistic environment reflections
-* multisample anti-aliasing (**\r_ext_multisample**)
-* supersample anti-aliasing (**\r_ext_supersample**)
-* per-window gamma-correction which is important for screen-capture tools like OBS
-* you can minimize game window any time during **\video**|**\video-pipe** recording
-* high dynamic range render targets (**\r_hdr 1**) to avoid color banding
-* bloom post-processing effect
-* arbitrary resolution rendering
-* greyscale mode
+## Patch Contents
 
-In general, not counting offscreen rendering features you might expect from 10% to 200%+ FPS increase comparing to KE's original version
+### 0001 — Server Infrastructure
 
-Highly recommended to use on modern systems
+All server-side changes: ftwgl fork infrastructure (USE_MV multiview, USE_AUTH,
+USE_SERVER_DEMO) **plus** subtick engine features.
 
-## OpenGL renderer
+| File | Changes |
+|------|---------|
+| `server.h` | gameTime/gameTimeResidual fields, awLastThinkTime, subtick cvar externs, USE_MV/USE_AUTH/USE_SERVER_DEMO fields, API changes |
+| `sv_main.c` | Dual-rate frame loop (sv_fps/sv_gameHz), engine-side antiwarp, snapshot dispatch, ftwgl cvar defs, USE_MV hooks |
+| `sv_init.c` | Cvar registration (sv_gameHz, sv_snapshotFps, sv_pmoveMsec, sv_busyWait, sv_extrapolate, sv_smoothClients, sv_bufferMs, sv_velSmooth, sv_antiwarp*, antilag), USE_MV/USE_AUTH init |
+| `sv_client.c` | Multi-step Pmove (sv_pmoveMsec), snaps policy (sv_snapshotFps), awLastThinkTime tracking, USE_MV/USE_AUTH client handling |
+| `sv_snapshot.c` | Engine-side position extrapolation, TR_LINEAR smoothing, velocity smoothing, per-client ring buffer, USE_MV snapshot changes |
+| `sv_ccmds.c` | MapRestart clock sync (sv.gameTime = sv.time), USE_MV/USE_SERVER_DEMO commands |
+| `sv_bot.c` | Bot snapshot rate fix |
 
-Based on classic OpenGL renderers from [idq3](https://github.com/id-Software/Quake-III-Arena)/[ioquake3](https://github.com/ioquake/ioq3)/[cnq3](https://bitbucket.org/CPMADevs/cnq3)/[openarena](https://github.com/OpenArena/engine), features:
+### 0002 — Engine-Side Antilag (NEW files)
 
-* OpenGL 1.1 compatible, uses features from newer versions whenever available
-* high-quality per-pixel dynamic lighting, can be triggered by **\r_dlightMode** cvar
-* merged lightmaps (atlases)
-* static world surfaces cached in VBO (**\r_vbo 1**)
-* all set of offscreen rendering features mentioned in Vulkan renderer, plus:
-* bloom reflection post-processing effect
+| File | Changes |
+|------|---------|
+| `sv_antilag.h` | Antilag interface — SV_AntilagInit, SV_AntilagRecord, SV_AntilagRewind, SV_AntilagRestore |
+| `sv_antilag.c` | Full antilag implementation — position recording at sv_physicsScale sub-ticks, rewind/restore for hit detection |
 
-Performance is usually greater or equal to other opengl1 renderers
+**Cvars:** `sv_antilagEnable`, `sv_physicsScale`, `sv_antilagMaxMs`
 
-## OpenGL2 renderer
+### 0003 — Client Changes
 
-Original ioquake3 renderer, performance is very poor on non-nvidia systems, unmaintained
+| File | Changes |
+|------|---------|
+| `client.h` | snapshotMsec field in clientActive_t, USE_MV client fields |
+| `cl_cgame.c` | Scaled jitter tolerance (RESET_TIME, fast-adjust, extrapolation detection, drift correction), serverTime clamp |
+| `cl_parse.c` | Snapshot interval measurement (EMA), bootstrap from sv_snapshotFps, USE_MV parsing |
+| `cl_input.c` | Download throttle scaled to snapshot interval, USE_MV input |
 
-## [Build Instructions](BUILD.md)
+### 0004 — Network and Common
 
-## Contacts
+| File | Changes |
+|------|---------|
+| `net_ip.c` | net_dropsim CVAR_CHEAT → CVAR_TEMP, structural changes |
+| `net_chan.c` | NET_FlushPacketQueue force-flush on delay=0, USE_MV netchan |
+| `common.c` | cl_packetdelay CVAR_CHEAT → CVAR_TEMP, ftwgl fork common changes |
 
-Discord channel: https://discordapp.com/invite/X3Exs4C
+### 0005 — Build System
 
-## Links
+| File | Changes |
+|------|---------|
+| `Makefile` | sv_antilag.c/h added to server build, USE_MV/USE_AUTH/USE_SERVER_DEMO build flags |
+| `CMakeLists.txt` | Same additions for CMake |
 
-* https://bitbucket.org/CPMADevs/cnq3
-* https://github.com/ioquake/ioq3
-* https://github.com/kennyalive/Quake-III-Arena-Kenny-Edition
-* https://github.com/OpenArena/engine
+## Feature Summary
+
+### Subtick Features
+- **sv_gameHz** — Decouple QVM game frame rate from engine tick rate
+- **sv_snapshotFps** — Independent snapshot send rate
+- **sv_pmoveMsec** — Multi-step Pmove for consistent physics
+- **sv_extrapolate** — Position correction between game frames
+- **sv_smoothClients** — TR_LINEAR trajectory for smooth rendering
+- **sv_bufferMs** — Per-client position ring buffer
+- **sv_velSmooth** — Velocity smoothing for TR_LINEAR
+- **sv_antiwarp** — Engine-side antiwarp (replaces QVM g_antiwarp)
+- **sv_antilag** — Engine-side antilag with sub-tick recording
+- **sv_busyWait** — Spin-wait for precise frame timing
+- **Client jitter tolerance** — Scaled time sync thresholds for high snapshot rates
+- **MapRestart clock sync** — Prevents sv.gameTime / sv.time desync on restart
+
+### FTWGL Fork Features
+- **USE_MV** — Multiview spectator support
+- **USE_AUTH** — Server authentication system
+- **USE_SERVER_DEMO** — Server-side demo recording
+- Various structural improvements and API changes
+
+## Recommended Setup (UT 4.3.4)
+
+```
+sv_fps 60
+sv_gameHz 0
+sv_snapshotFps -1
+sv_pmoveMsec 8
+sv_antiwarp 2
+sv_antiwarpDecay 150
+sv_smoothClients 1
+sv_velSmooth 32
+sv_antilagEnable 1
+```
